@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "BNZ Ops Suite",
+    "slug": "bnz-ops-suite",
+    "scheme": "bnzops",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B0D10"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.bnzbuilders.opssuite",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B0D10"
+      },
+      "package": "com.bnzbuilders.opssuite",
+      "versionCode": 1
+    }
+  }
+}
