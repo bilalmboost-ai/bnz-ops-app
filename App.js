@@ -1,32 +1,9 @@
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState } from "react";
-import { SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Platform, KeyboardAvoidingView } from "react-native";
-
-const BNZ = {
-  id: "bnz",
-  name: "BNZ Builders INC",
-  city: "Cedarhurst, NY",
-  phone: "1-332-258-1401",
-  email: "bnzbuilders1@gmail.com",
-  pmEmail: "saracooper@bnzbuildersinc.com",
-  trades: ["GC", "Commercial reno", "Residential reno", "Paint", "Drywall", "Fit-out"],
-  notes: "Bonding capacity is private.",
-  jobs: [{ name: "Institutional interior renovation", loc: "New York", trade: "Interiors", status: "Active" }],
-  vendors: [{ name: "Vetted NYS bench", trade: "Multi-trade", status: "Preferred" }],
-};
-
-const AGENTS = {
-  sara: { name: "Sara", role: "Procurement & inbox" },
-  emma: { name: "Emma", role: "Subcontractor desk" },
-  taylor: { name: "Taylor", role: "Master estimator" },
-};
-
-function reply(agent, company, text) {
-  if (agent === "taylor") return `${AGENTS.taylor.name} — ${company.name}\nI will not invent a bid number from chat. Send drawings, specs, and the bid date.`;
-  if (agent === "emma") return `${AGENTS.emma.name} — ${company.name}\nNeed trade, county, due date, prevailing wage yes/no. New vendors only unless you say otherwise.`;
-  return `${AGENTS.sara.name} — ${company.name}\n${company.phone} · ${company.email}\nI draft RFQs inside this company only.\nYou asked: ${text}`;
-}
+import { SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, KeyboardAvoidingView, Platform, Linking } from "react-native";
+import { BNZ } from "./src/seed";
+import { AGENTS, agentReply, draftRfq } from "./src/agents";
 
 export default function App() {
   const [screen, setScreen] = useState("home");
@@ -35,110 +12,117 @@ export default function App() {
   const [agent, setAgent] = useState("sara");
   const [thread, setThread] = useState([]);
   const [draft, setDraft] = useState("");
-  const [form, setForm] = useState({ name: "", city: "", phone: "", email: "" });
+  const [jobForm, setJobForm] = useState({ name: "", loc: "", trade: "", status: "Bidding" });
+  const [vendorForm, setVendorForm] = useState({ name: "", trade: "", status: "New" });
+  const [rfq, setRfq] = useState({ trade: "", job: "", due: "", wage: "Confirm" });
+  const [coForm, setCoForm] = useState({ name: "", city: "", phone: "", email: "", trades: "" });
+  const [rfqOut, setRfqOut] = useState("");
   const company = companies[activeId] || BNZ;
 
   useEffect(() => {
-    AsyncStorage.getItem("bnz_tenants").then((raw) => {
+    (async () => {
+      const raw = await AsyncStorage.getItem("bnz_tenants");
       if (raw) setCompanies((c) => ({ ...c, ...JSON.parse(raw) }));
-    });
+      const last = await AsyncStorage.getItem("bnz_active");
+      if (last) setActiveId(last);
+    })();
   }, []);
 
-  async function saveCompany() {
-    if (!form.name.trim()) return;
-    const id = form.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
-    const t = { id, name: form.name.trim(), city: form.city, phone: form.phone, email: form.email, jobs: [], vendors: [], notes: "Customer tenant." };
-    const raw = await AsyncStorage.getItem("bnz_tenants");
-    const extra = raw ? JSON.parse(raw) : {};
-    extra[id] = t;
+  async function writeCompanies(next, active) {
+    const extra = { ...next };
+    delete extra.bnz;
     await AsyncStorage.setItem("bnz_tenants", JSON.stringify(extra));
-    setCompanies((c) => ({ ...c, [id]: t }));
-    setActiveId(id);
-    setScreen("home");
+    if (active) {
+      await AsyncStorage.setItem("bnz_active", active);
+      setActiveId(active);
+    }
+    setCompanies(next);
+  }
+
+  function patchCompany(partial) {
+    writeCompanies({ ...companies, [activeId]: { ...company, ...partial } }, activeId);
   }
 
   return (
-    <SafeAreaView style={s.root}>
+    <SafeAreaView style={styles.root}>
       <StatusBar style="light" />
-      <View style={s.top}>
-        <Text style={s.kicker}>BNZ OPS SUITE</Text>
-        <Text style={s.title}>{company.name}</Text>
-        <Text style={s.meta}>{company.city} · {company.phone}</Text>
+      <View style={styles.top}>
+        <Text style={styles.kicker}>BNZ OPS SUITE</Text>
+        <Text style={styles.company}>{company.name}</Text>
+        <Text style={styles.meta}>{[company.city, company.phone].filter(Boolean).join(" · ")}</Text>
       </View>
-      <ScrollView style={s.body}>
-        {screen === "home" && Object.entries(AGENTS).map(([k, a]) => (
-          <TouchableOpacity key={k} style={s.card} onPress={() => { setAgent(k); setScreen("agents"); }}>
-            <Text style={s.tag}>{a.name.toUpperCase()}</Text>
-            <Text style={s.cardTitle}>{a.role}</Text>
+      <ScrollView style={styles.body} keyboardShouldPersistTaps="handled">
+        {screen === "home" && Object.values(AGENTS).map((a) => (
+          <TouchableOpacity key={a.key} style={styles.card} onPress={() => { setAgent(a.key); setScreen("agents"); }}>
+            <Text style={styles.tag}>{a.name.toUpperCase()}</Text>
+            <Text style={styles.cardTitle}>{a.role}</Text>
+            <Text style={styles.p}>{a.blurb}</Text>
           </TouchableOpacity>
         ))}
-        {screen === "jobs" && (company.jobs || []).map((j, i) => (
-          <View key={i} style={s.card}><Text style={s.cardTitle}>{j.name}</Text><Text style={s.meta}>{j.loc} · {j.status}</Text></View>
-        ))}
+        {screen === "jobs" && (
+          <View>
+            {(company.jobs || []).map((j, i) => <View key={i} style={styles.card}><Text style={styles.cardTitle}>{j.name}</Text><Text style={styles.p}>{[j.loc, j.trade, j.status].filter(Boolean).join(" · ")}</Text></View>)}
+            {"name,loc,trade,status".split(",").map((k) => <TextInput key={k} style={styles.input} placeholder={k} placeholderTextColor="#6b7380" value={jobForm[k]} onChangeText={(v) => setJobForm({ ...jobForm, [k]: v })} />)}
+            <TouchableOpacity style={styles.btn} onPress={() => { if (!jobForm.name.trim()) return; patchCompany({ jobs: [...(company.jobs || []), jobForm] }); setJobForm({ name: "", loc: "", trade: "", status: "Bidding" }); }}><Text style={styles.btnTxt}>Save job</Text></TouchableOpacity>
+            {(company.vendors || []).map((v, i) => <View key={i} style={styles.card}><Text style={styles.cardTitle}>{v.name}</Text><Text style={styles.p}>{v.trade}</Text></View>)}
+            {"name,trade,status".split(",").map((k) => <TextInput key={k} style={styles.input} placeholder={k} placeholderTextColor="#6b7380" value={vendorForm[k]} onChangeText={(v) => setVendorForm({ ...vendorForm, [k]: v })} />)}
+            <TouchableOpacity style={styles.btn} onPress={() => { if (!vendorForm.name.trim()) return; patchCompany({ vendors: [...(company.vendors || []), vendorForm] }); setVendorForm({ name: "", trade: "", status: "New" }); }}><Text style={styles.btnTxt}>Save vendor</Text></TouchableOpacity>
+          </View>
+        )}
+        {screen === "rfq" && (
+          <View>
+            <TextInput style={styles.input} placeholder="Trade" placeholderTextColor="#6b7380" value={rfq.trade} onChangeText={(v) => setRfq({ ...rfq, trade: v })} />
+            <TextInput style={styles.input} placeholder="Job" placeholderTextColor="#6b7380" value={rfq.job} onChangeText={(v) => setRfq({ ...rfq, job: v })} />
+            <TextInput style={styles.input} placeholder="Due" placeholderTextColor="#6b7380" value={rfq.due} onChangeText={(v) => setRfq({ ...rfq, due: v })} />
+            <TouchableOpacity style={styles.btn} onPress={() => setRfqOut(draftRfq({ company, ...rfq }))}><Text style={styles.btnTxt}>Generate RFQ</Text></TouchableOpacity>
+            {!!rfqOut && <View style={styles.card}><Text selectable style={styles.p}>{rfqOut}</Text></View>}
+          </View>
+        )}
         {screen === "agents" && (
           <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <View style={s.row}>
-              {Object.entries(AGENTS).map(([k, a]) => (
-                <TouchableOpacity key={k} style={[s.chip, agent === k && s.chipOn]} onPress={() => setAgent(k)}>
-                  <Text style={s.chipTxt}>{a.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            {thread.map((m, i) => <View key={i} style={s.bubble}><Text style={s.bubbleTxt}>{m}</Text></View>)}
-            <TextInput style={s.input} placeholder="Ask about a bid or RFQ" placeholderTextColor="#6b7380" value={draft} onChangeText={setDraft} />
-            <TouchableOpacity style={s.btn} onPress={() => { if (!draft.trim()) return; setThread((t) => [...t, draft, reply(agent, company, draft)]); setDraft(""); }}>
-              <Text style={s.btnTxt}>Send to {AGENTS[agent].name}</Text>
-            </TouchableOpacity>
+            <View style={styles.row}>{Object.values(AGENTS).map((a) => <TouchableOpacity key={a.key} style={[styles.chip, agent === a.key && styles.chipOn]} onPress={() => setAgent(a.key)}><Text style={styles.chipTxt}>{a.name}</Text></TouchableOpacity>)}</View>
+            {thread.map((m, i) => <View key={i} style={styles.bubble}><Text style={styles.p}>{m.text}</Text></View>)}
+            <TextInput style={styles.input} placeholder="Ask an agent" placeholderTextColor="#6b7380" value={draft} onChangeText={setDraft} multiline />
+            <TouchableOpacity style={styles.btn} onPress={() => { if (!draft.trim()) return; setThread((t) => [...t, { role: "you", text: draft }, { role: "agent", text: agentReply(agent, company, draft) }]); setDraft(""); }}><Text style={styles.btnTxt}>Send</Text></TouchableOpacity>
           </KeyboardAvoidingView>
         )}
         {screen === "company" && (
           <View>
-            {Object.values(companies).map((c) => (
-              <TouchableOpacity key={c.id} style={s.card} onPress={() => setActiveId(c.id)}>
-                <Text style={s.cardTitle}>{c.name}</Text>
-                <Text style={s.meta}>{c.city}</Text>
-              </TouchableOpacity>
-            ))}
-            {"name,city,phone,email".split(",").map((k) => (
-              <TextInput key={k} style={s.input} placeholder={k} placeholderTextColor="#6b7380" value={form[k]} onChangeText={(v) => setForm({ ...form, [k]: v })} />
-            ))}
-            <TouchableOpacity style={s.btn} onPress={saveCompany}><Text style={s.btnTxt}>Create workspace</Text></TouchableOpacity>
-            <Text style={s.meta}>Support 1-332-258-1401 · bnzbuilders1@gmail.com</Text>
+            {Object.values(companies).map((c) => <TouchableOpacity key={c.id} style={[styles.card, c.id === activeId && styles.cardOn]} onPress={() => writeCompanies(companies, c.id)}><Text style={styles.cardTitle}>{c.name}</Text><Text style={styles.p}>{c.city}</Text></TouchableOpacity>)}
+            {"name,city,phone,email,trades".split(",").map((k) => <TextInput key={k} style={styles.input} placeholder={k} placeholderTextColor="#6b7380" value={coForm[k]} onChangeText={(v) => setCoForm({ ...coForm, [k]: v })} />)}
+            <TouchableOpacity style={styles.btn} onPress={() => { if (!coForm.name.trim()) return; const id = coForm.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40); writeCompanies({ ...companies, [id]: { id, name: coForm.name.trim(), city: coForm.city, phone: coForm.phone, email: coForm.email, trades: coForm.trades.split(",").map((s) => s.trim()).filter(Boolean), jobs: [], vendors: [], notes: "Customer tenant." } }, id); }}><Text style={styles.btnTxt}>Create workspace</Text></TouchableOpacity>
+            <Text style={styles.p} onPress={() => Linking.openURL("tel:+13322581401")}>1-332-258-1401</Text>
+            <Text style={styles.p} onPress={() => Linking.openURL("mailto:bnzbuilders1@gmail.com")}>bnzbuilders1@gmail.com</Text>
           </View>
         )}
       </ScrollView>
-      <View style={s.tabs}>
-        {["home", "jobs", "agents", "company"].map((id) => (
-          <TouchableOpacity key={id} style={s.tab} onPress={() => setScreen(id)}>
-            <Text style={[s.tabTxt, screen === id && s.tabOn]}>{id}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <View style={styles.tabs}>{[["home","Home"],["jobs","Jobs"],["rfq","RFQ"],["agents","Agents"],["company","Co."]].map(([id,label]) => <TouchableOpacity key={id} style={styles.tab} onPress={() => setScreen(id)}><Text style={[styles.tabTxt, screen===id && styles.tabOn]}>{label}</Text></TouchableOpacity>)}</View>
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0B0D10" },
   top: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#262B33" },
-  kicker: { color: "#E07A3D", letterSpacing: 1.4, fontWeight: "700", fontSize: 11 },
-  title: { color: "#F4F4F2", fontSize: 20, fontWeight: "700", marginTop: 4 },
-  meta: { color: "#8B949E", marginTop: 4 },
+  kicker: { color: "#E07A3D", letterSpacing: 1.5, fontSize: 11, fontWeight: "700" },
+  company: { color: "#F4F4F2", fontSize: 20, fontWeight: "700", marginTop: 4 },
+  meta: { color: "#8B949E" },
   body: { flex: 1, padding: 16 },
+  p: { color: "#9AA3AD", marginBottom: 8 },
   card: { backgroundColor: "#171B21", borderColor: "#262B33", borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 10 },
+  cardOn: { borderColor: "#E07A3D" },
   tag: { color: "#E07A3D", fontSize: 11, fontWeight: "700" },
   cardTitle: { color: "#F4F4F2", fontSize: 16, fontWeight: "700", marginTop: 4 },
-  row: { flexDirection: "row", gap: 8, marginBottom: 12 },
-  chip: { borderWidth: 1, borderColor: "#262B33", borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12 },
+  row: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  chip: { borderWidth: 1, borderColor: "#262B33", borderRadius: 999, padding: 8 },
   chipOn: { backgroundColor: "#E07A3D" },
   chipTxt: { color: "#fff" },
   bubble: { backgroundColor: "#171B21", borderRadius: 12, padding: 12, marginBottom: 8 },
-  bubbleTxt: { color: "#E8ECF0" },
   input: { backgroundColor: "#0E1116", borderColor: "#262B33", borderWidth: 1, borderRadius: 10, color: "#fff", padding: 12, marginBottom: 10 },
-  btn: { backgroundColor: "#E07A3D", borderRadius: 10, padding: 14, alignItems: "center", marginBottom: 10 },
+  btn: { backgroundColor: "#E07A3D", borderRadius: 10, padding: 14, alignItems: "center", marginBottom: 8 },
   btnTxt: { color: "#fff", fontWeight: "700" },
   tabs: { flexDirection: "row", borderTopWidth: 1, borderTopColor: "#262B33" },
   tab: { flex: 1, alignItems: "center", padding: 12 },
-  tabTxt: { color: "#6B7380", textTransform: "capitalize" },
+  tabTxt: { color: "#6B7380", fontSize: 12 },
   tabOn: { color: "#E07A3D", fontWeight: "700" },
 });
